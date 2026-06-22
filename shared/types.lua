@@ -1,0 +1,7 @@
+---@class StationConfig
+---@field id string
+---@field label string
+---@field frequency number
+---@field streamUrl string
+---@field icon string
+---@field description string
