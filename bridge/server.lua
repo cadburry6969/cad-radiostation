@@ -1,3 +1,9 @@
+Config = lib.load('config.shared')
+ServerConfig = lib.load('config.server')
+
+--- Resolves identifier, job and permission group for a player.
+---@param source number
+---@return { identifier: string, job: string, group: string }|nil
 function GetPlayer(source)
     local player = {}
 
@@ -29,10 +35,10 @@ function GetPlayer(source)
     return player
 end
 
-function HasPermission(source, permission)
-    return true
-end
-
+--- Shows a notification through whichever framework is running.
+---@param source number
+---@param msg string
+---@param type string|nil 'success' | 'error' | 'info' | 'warning'
 function Notify(source, msg, type)
     if GetResourceState('ox_lib') == 'started' then
         TriggerClientEvent('ox_lib:notify', source, { description = msg, type = type })
@@ -40,5 +46,12 @@ function Notify(source, msg, type)
         TriggerClientEvent('esx:showNotification', source, msg)
     elseif GetResourceState('qbx_core') == 'started' or GetResourceState('qb-core') == 'started' then
         TriggerClientEvent('QBCore:Notify', source, msg, type)
+    end
+end
+
+--- Prints a namespaced message when debug logging is enabled.
+function Debug(...)
+    if Config.debug then
+        print('[cad-radiostation:server]', ...)
     end
 end

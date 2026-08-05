@@ -10,12 +10,14 @@ ui_page 'web/index.html'
 
 files {
     'web/index.html',
-    'web/**/*'
+    'web/**/*',
+    'config/shared.lua',
+    'config/client.lua',
 }
 
 shared_scripts {
     '@ox_lib/init.lua',
-    'shared/config.lua',
+    -- Annotations only, emits no runtime code
     'shared/types.lua',
 }
 
@@ -25,8 +27,6 @@ client_scripts {
 }
 
 server_scripts {
-    '@oxmysql/lib/MySQL.lua',
-    -- '@mysql-async/lib/MySQL.lua',
     'bridge/server.lua',
     'modules/**/server.lua',
 }
@@ -36,6 +36,7 @@ dependencies {
 }
 
 escrow_ignore {
+    'config/*',
     'bridge/**/*',
     'shared/*'
 }

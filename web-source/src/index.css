@@ -1,45 +1,30 @@
-@import url("https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Exo+2:wght@600;700;800&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * The page floats over the game, so every layer up to the panel itself must be
+ * fully transparent. An opaque value anywhere here shows up in-game as a black
+ * screen. For the same reason no element uses backdrop-filter: CEF composites
+ * it against an empty backdrop and paints the result black.
+ */
 html,
-body {
+body,
+#root {
     margin: 0;
+    height: 100%;
+    width: 100%;
+    background: transparent;
+    overflow: hidden;
+}
+
+body {
+    font-family: Inter, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    height: 100vh;
-    width: 100vw;
-    font-family: Roboto, sans-serif;
-}
-
-#root {
-    height: 100%
-}
-
-::-webkit-scrollbar {
-    width: 0.25rem;
-}
-
-::-webkit-scrollbar-track {
-    border-radius: 9999px;
-    background-color: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-    border-radius: 9999px;
-    background-color: rgb(75 85 99);
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background-color: rgb(107 114 128);
-}
-
-input::-webkit-outer-spin-button,
-input::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
+    user-select: none;
 }
 
 :root {
@@ -47,39 +32,38 @@ input::-webkit-inner-spin-button {
     --foreground: 210 40% 98%;
     --card: 222 47% 11%; /* slate-900 */
     --card-foreground: 210 40% 98%;
-    --popover: 224 71% 4%;
-    --popover-foreground: 210 40% 98%;
     --primary: 0 72% 51%; /* red-600 */
     --primary-foreground: 210 40% 98%;
     --secondary: 215 28% 17%; /* slate-800 */
-    --secondary-foreground: 210 40% 98%;
     --muted: 215 28% 17%;
     --muted-foreground: 215 20% 65%;
     --accent: 0 72% 51%;
-    --accent-foreground: 210 40% 98%;
     --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
     --border: 215 28% 17%;
-    --input: 217 33% 17%; /* slate-800 */
+    --input: 217 33% 17%;
     --ring: 0 72% 51%;
     --radius: 0.75rem;
 }
+
+.custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(220, 38, 38, 0.4) transparent;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
     height: 6px;
     width: 6px;
 }
+
 .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
 }
+
 .custom-scrollbar::-webkit-scrollbar-thumb {
-    background-color: rgba(220, 38, 38, 0.4); /* red-600 with 40% opacity */
     border-radius: 10px;
+    background-color: rgba(220, 38, 38, 0.4);
 }
+
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(220, 38, 38, 0.6); /* red-600 with 60% opacity */
-}
-/* For Firefox */
-.custom-scrollbar {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(220, 38, 38, 0.4) transparent;
+    background-color: rgba(220, 38, 38, 0.6);
 }

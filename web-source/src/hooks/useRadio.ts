@@ -1,79 +1,93 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNuiEvent } from './useNuiEvent';
 import { fetchNui } from '../utils/fetchNui';
+import { resolveMediaSource } from '../utils/mediaSource';
+import { embedPlayer } from '../utils/embedPlayer';
 
-const ICE_SERVERS = [
+const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
 
+interface SignalPayload {
+  signalType: 'offer' | 'answer' | 'ice';
+  fromPeerId: string;
+  sdp?: string;
+  candidate?: RTCIceCandidateInit;
+}
+
+const clamp = (value: number) => Math.min(1, Math.max(0, value));
+
+// The audio engine: one player for the stream, plus WebRTC peers for live voice.
 export const useRadio = () => {
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [isLive, setIsLive] = useState(false);
 
-  // Audio Stream State
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const streamVolumeRef = useRef(0.5);
+  const volumeRef = useRef(0.5);
 
-  // WebRTC State
   const localStreamRef = useRef<MediaStream | null>(null);
-  const peerConnectionsRef = useRef<Record<string, RTCPeerConnection>>({});
+  const peersRef = useRef<Record<string, RTCPeerConnection>>({});
   const remoteAudiosRef = useRef<Record<string, HTMLAudioElement>>({});
-  const isBroadcasterRef = useRef(false);
-  const voiceVolumeRef = useRef(1.0);
 
-  const clamp = (v: number) => Math.min(1.0, Math.max(0.0, v));
-
-  // --- AUDIO STREAM LOGIC ---
+  // Push-to-talk is off until the key is held, and must survive a late mic grant
+  const transmitRef = useRef(false);
 
   const stopStream = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = '';
-      audioRef.current.load();
-      audioRef.current = null;
-    }
+    embedPlayer.stop();
+
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.src = '';
+    audio.load();
+    audioRef.current = null;
   };
 
   const playStream = (url: string, volume?: number) => {
     stopStream();
-    if (!url || url === '') return;
+    if (!url) return;
 
-    const audio = new Audio(url);
-    audio.volume = clamp(volume !== undefined ? volume : streamVolumeRef.current);
+    if (volume !== undefined) volumeRef.current = clamp(volume);
+
+    const source = resolveMediaSource(url);
+
+    if (source.kind === 'embed' && source.embedId) {
+      embedPlayer.play(source.embedId, volumeRef.current).catch(() => {
+        fetchNui('audioError', { error: 'Failed to load stream' });
+      });
+      return;
+    }
+
+    const audio = new Audio(source.url);
     audio.crossOrigin = 'anonymous';
+    audio.volume = volumeRef.current;
 
-    audio.addEventListener('error', (e) => {
-      const error = (e.target as any).error;
-      console.error('[radio] Stream error:', error);
+    audio.addEventListener('error', () => {
       fetchNui('audioError', { error: 'Failed to load stream' });
     });
 
-    audio.play().then(() => {
-      console.log('[radio] Stream playing:', url);
-    }).catch((err) => {
-      console.warn('[radio] Stream play failed:', err.message);
+    audio.play().catch((err: Error) => {
       fetchNui('audioError', { error: err.message });
     });
 
     audioRef.current = audio;
   };
 
-  const setStreamVolume = (vol: number) => {
-    streamVolumeRef.current = clamp(vol);
-    if (audioRef.current) {
-      audioRef.current.volume = streamVolumeRef.current;
-    }
+  // One volume controls the stream, any embed, and incoming live voice
+  const setVolume = (volume: number) => {
+    volumeRef.current = clamp(volume);
+    if (audioRef.current) audioRef.current.volume = volumeRef.current;
+    embedPlayer.setVolume(volumeRef.current);
+    Object.values(remoteAudiosRef.current).forEach((audio) => {
+      audio.volume = volumeRef.current;
+    });
   };
 
-  // --- WEBRTC LOGIC ---
-
   const closePeer = (peerId: string) => {
-    const pc = peerConnectionsRef.current[peerId];
-    if (pc) {
-      pc.close();
-      delete peerConnectionsRef.current[peerId];
-    }
+    peersRef.current[peerId]?.close();
+    delete peersRef.current[peerId];
+
     const audio = remoteAudiosRef.current[peerId];
     if (audio) {
       audio.pause();
@@ -83,24 +97,27 @@ export const useRadio = () => {
   };
 
   const closeAllPeers = () => {
-    Object.keys(peerConnectionsRef.current).forEach(closePeer);
-    stopMicCapture();
+    Object.keys(peersRef.current).forEach(closePeer);
+  };
+
+  // Mutes or unmutes the outgoing tracks without detaching them
+  const applyTransmit = () => {
+    localStreamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = transmitRef.current;
+    });
   };
 
   const stopMicCapture = () => {
-    Object.keys(peerConnectionsRef.current).forEach(closePeer);
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t: any) => t.stop());
-      localStreamRef.current = null;
-    }
-    isBroadcasterRef.current = false;
+    closeAllPeers();
+    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localStreamRef.current = null;
+    transmitRef.current = false;
     setIsTransmitting(false);
-    console.log('[radio] Mic released, broadcast stopped');
   };
 
   const startMicCapture = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      localStreamRef.current = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -109,169 +126,115 @@ export const useRadio = () => {
         },
         video: false,
       });
-      localStreamRef.current = stream;
-      isBroadcasterRef.current = true;
-      console.log('[radio] Mic captured successfully');
+      // getUserMedia hands back live tracks, so re-apply the armed state
+      applyTransmit();
       fetchNui('micCaptured', { success: true });
-    } catch (err: any) {
-      console.error('[radio] getUserMedia failed:', err.name, err.message);
-      fetchNui('micCaptured', { success: false, error: `${err.name}: ${err.message}` });
+    } catch (err) {
+      const error = err as Error;
+      fetchNui('micCaptured', { success: false, error: `${error.name}: ${error.message}` });
     }
   };
 
-  const makePeerConnection = (peerId: string) => {
-    if (peerConnectionsRef.current[peerId]) closePeer(peerId);
+  const setTransmit = (enabled: boolean) => {
+    transmitRef.current = enabled;
+    applyTransmit();
+    setIsTransmitting(enabled);
+  };
 
+  const makePeerConnection = (peerId: string) => {
+    closePeer(peerId);
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-    pc.onicecandidate = (ev) => {
-      if (ev.candidate) {
-        fetchNui('signal', {
-          targetPeerId: peerId,
-          type: 'ice',
-          candidate: {
-            candidate: ev.candidate.candidate,
-            sdpMid: ev.candidate.sdpMid,
-            sdpMLineIndex: ev.candidate.sdpMLineIndex,
-          },
-        });
-      }
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) return;
+      fetchNui('signal', {
+        targetPeerId: peerId,
+        type: 'ice',
+        candidate: {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+        },
+      });
     };
 
-    pc.ontrack = (ev) => {
-      console.log('[radio] Got remote audio from', peerId);
+    pc.ontrack = (event) => {
       let audio = remoteAudiosRef.current[peerId];
       if (!audio) {
         audio = new Audio();
         audio.autoplay = true;
-        audio.volume = clamp(voiceVolumeRef.current);
         remoteAudiosRef.current[peerId] = audio;
       }
-      audio.srcObject = ev.streams[0];
-      audio.play().catch((e: any) => {
-        console.warn('[radio] Remote audio play error:', e.message);
-      });
+      audio.volume = volumeRef.current;
+      audio.srcObject = event.streams[0];
+      audio.play().catch(() => undefined);
       fetchNui('voiceConnected', { peerId });
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log('[radio] ICE state', peerId, ':', pc.iceConnectionState);
       if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
         closePeer(peerId);
       }
     };
 
-    peerConnectionsRef.current[peerId] = pc;
+    peersRef.current[peerId] = pc;
     return pc;
   };
 
   const createOfferFor = async (listenerId: string) => {
-    if (!localStreamRef.current) {
-      console.warn('[radio] No localStream, cannot create offer');
-      return;
-    }
-    const pc = makePeerConnection(listenerId);
-    localStreamRef.current.getTracks().forEach((track: any) => {
-      pc.addTrack(track, localStreamRef.current!);
-    });
+    const localStream = localStreamRef.current;
+    if (!localStream) return;
 
-    try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      fetchNui('signal', {
-        targetPeerId: listenerId,
-        type: 'offer',
-        sdp: offer.sdp,
-      });
-      console.log('[radio] Sent offer to', listenerId);
-    } catch (err) {
-      console.error('[radio] createOffer error:', err);
-    }
+    const pc = makePeerConnection(listenerId);
+    localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    fetchNui('signal', { targetPeerId: listenerId, type: 'offer', sdp: offer.sdp });
   };
 
   const handleOffer = async (fromId: string, sdp: string) => {
     const pc = makePeerConnection(fromId);
-    try {
-      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      fetchNui('signal', {
-        targetPeerId: fromId,
-        type: 'answer',
-        sdp: answer.sdp,
-      });
-      console.log('[radio] Sent answer to', fromId);
-    } catch (err) {
-      console.error('[radio] handleOffer error:', err);
-    }
+    await pc.setRemoteDescription({ type: 'offer', sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    fetchNui('signal', { targetPeerId: fromId, type: 'answer', sdp: answer.sdp });
   };
 
   const handleAnswer = async (fromId: string, sdp: string) => {
-    const pc = peerConnectionsRef.current[fromId];
-    if (!pc) return;
-    try {
-      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
-      console.log('[radio] Set answer from', fromId);
-    } catch (err) {
-      console.error('[radio] handleAnswer error:', err);
-    }
+    await peersRef.current[fromId]?.setRemoteDescription({ type: 'answer', sdp });
   };
 
-  const handleIce = async (fromId: string, candidate: any) => {
-    const pc = peerConnectionsRef.current[fromId];
-    if (!pc) return;
-    try {
-      await pc.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (err) {
-      console.error('[radio] addIceCandidate error:', err);
-    }
+  const handleIce = async (fromId: string, candidate: RTCIceCandidateInit) => {
+    await peersRef.current[fromId]?.addIceCandidate(candidate);
   };
 
-  const setVoiceVolume = (vol: number) => {
-    voiceVolumeRef.current = clamp(vol);
-    Object.values(remoteAudiosRef.current).forEach((audio: any) => {
-      audio.volume = voiceVolumeRef.current;
-    });
-  };
-
-  const setTransmit = (enabled: boolean) => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach((track: any) => {
-        track.enabled = enabled;
-      });
-      console.log('[radio] Transmit:', enabled ? 'ON' : 'OFF');
-    }
-    setIsTransmitting(enabled);
-  };
-
-  // --- NUI EVENT HANDLERS ---
-
-  useNuiEvent<{ url: string; volume?: number }>('playStream', (data) => playStream(data.url, data.volume));
+  useNuiEvent<{ url: string; volume?: number }>('playStream', (data) =>
+    playStream(data.url, data.volume),
+  );
   useNuiEvent('stopStream', stopStream);
-  useNuiEvent<{ volume: number }>('setVolume', (data) => setStreamVolume(data.volume));
+  useNuiEvent<{ volume: number }>('setVolume', (data) => setVolume(data.volume));
 
   useNuiEvent('startMic', startMicCapture);
   useNuiEvent('stopMic', stopMicCapture);
   useNuiEvent<{ enabled: boolean }>('setTransmit', (data) => setTransmit(data.enabled));
   useNuiEvent<{ listenerId: string }>('createOffer', (data) => createOfferFor(data.listenerId));
+  useNuiEvent<{ peerId: string }>('closePeer', (data) => closePeer(data.peerId));
+  useNuiEvent('closeAll', stopMicCapture);
+  useNuiEvent<{ enabled: boolean }>('setLive', (data) => setIsLive(data.enabled));
 
-  useNuiEvent<{ signalType: string; fromPeerId: string; sdp: string; candidate: any }>('signal', (data) => {
-    if (data.signalType === 'offer') handleOffer(data.fromPeerId, data.sdp);
-    else if (data.signalType === 'answer') handleAnswer(data.fromPeerId, data.sdp);
-    else if (data.signalType === 'ice') handleIce(data.fromPeerId, data.candidate);
+  useNuiEvent<SignalPayload>('signal', (data) => {
+    if (data.signalType === 'offer' && data.sdp) handleOffer(data.fromPeerId, data.sdp);
+    else if (data.signalType === 'answer' && data.sdp) handleAnswer(data.fromPeerId, data.sdp);
+    else if (data.signalType === 'ice' && data.candidate) handleIce(data.fromPeerId, data.candidate);
   });
 
-  useNuiEvent<{ peerId: string }>('closePeer', (data) => closePeer(data.peerId));
-  useNuiEvent('closeAll', closeAllPeers);
-  useNuiEvent<{ enabled: boolean }>('setLive', (data) => setIsLive(data.enabled));
-  useNuiEvent<{ volume: number }>('setVoiceVolume', (data) => setVoiceVolume(data.volume));
-
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopStream();
-      closeAllPeers();
+      stopMicCapture();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return { isTransmitting, isLive };
