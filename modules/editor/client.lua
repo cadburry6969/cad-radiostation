@@ -409,7 +409,7 @@ showMainMenu = function()
         },
     }
 
-    for _, station in ipairs(Stations.GetAll()) do
+    for _, station in ipairs(Stations:getAll()) do
         options[#options + 1] = {
             title       = station.label,
             description = ('%d MHz  •  %d zone(s), %d target(s)')

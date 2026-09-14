@@ -30,3 +30,9 @@ end)
 RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
     TriggerServerEvent('cad-radiostation:requestStations')
 end)
+
+--- Force get stations if script has been restarted
+CreateThread(function()
+    if not NetworkIsSessionStarted() then return end
+    TriggerServerEvent('cad-radiostation:requestStations')
+end)

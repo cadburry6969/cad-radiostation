@@ -1,6 +1,6 @@
 return {
     -- Keybind that opens the radio, and the label shown in the FiveM key settings
-    openKey = 'F5',
+    openKey = 'Q',
     openKeyLabel = 'Open Radio',
 
     -- Key held to transmit while voice broadcasting

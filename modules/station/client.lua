@@ -1,20 +1,20 @@
----@class StationCache
-Stations = {}
+--- Client-side station cache plus the world zones and target points built from it.
+---@class StationCache : OxClass
+---@field private cache ClientStation[]
+---@field private byId table<string, ClientStation>
+---@field private occupiedZones table<string, true> Ids of zones the player is inside
+---@field private zoneHandles table[] Handles returned by lib.zones.box
+---@field private targetHandles { resource: string, handle: any }[]
+local StationCache = lib.class('StationCache')
 
----@type ClientStation[]
-local cache = {}
-
----@type table<string, ClientStation> Indexed by station id for O(1) lookups
-local byId = {}
-
----@type table<string, true> Ids of the stations whose zone the player is inside
-local occupiedZones = {}
-
----@type table[] Handles returned by lib.zones.box
-local zoneHandles = {}
-
----@type { resource: string, handle: any }[] Handles returned by the target resource
-local targetHandles = {}
+--- Initialises empty caches and handle lists.
+function StationCache:constructor()
+    self.cache = {}
+    self.byId = {}
+    self.occupiedZones = {}
+    self.zoneHandles = {}
+    self.targetHandles = {}
+end
 
 --- Converts a stored {x,y,z} table into a vector3.
 ---@param coords { x: number, y: number, z: number }
@@ -33,74 +33,74 @@ end
 
 --- The station list this player is allowed to see.
 ---@return ClientStation[]
-function Stations.GetAll()
-    return cache
+function StationCache:getAll()
+    return self.cache
 end
 
 --- Finds a station by id.
 ---@param stationId string
 ---@return ClientStation|nil
-function Stations.GetById(stationId)
-    return byId[stationId]
+function StationCache:getById(stationId)
+    return self.byId[stationId]
 end
 
 --- Whether the player is standing in any station's broadcast zone.
 ---@return boolean
-function Stations.IsInAnyZone()
-    return next(occupiedZones) ~= nil
+function StationCache:isInAnyZone()
+    return next(self.occupiedZones) ~= nil
 end
 
 --- The station whose zone the player occupies and may operate, if any.
 ---@return ClientStation|nil
-function Stations.GetCurrentZoneStation()
-    for stationId in pairs(occupiedZones) do
-        local station = byId[stationId]
+function StationCache:getCurrentZoneStation()
+    for stationId in pairs(self.occupiedZones) do
+        local station = self.byId[stationId]
         if station and station.canBroadcast then return station end
     end
     return nil
 end
 
 --- Removes every zone and target created from the previous station list.
-local function destroyWorldGeometry()
-    for _, zone in ipairs(zoneHandles) do
+function StationCache:destroyWorldGeometry()
+    for _, zone in ipairs(self.zoneHandles) do
         zone:remove()
     end
-    zoneHandles = {}
+    self.zoneHandles = {}
 
-    for _, entry in ipairs(targetHandles) do
+    for _, entry in ipairs(self.targetHandles) do
         if entry.resource == 'ox_target' then
             exports.ox_target:removeZone(entry.handle)
         else
             exports['qb-target']:RemoveZone(entry.handle)
         end
     end
-    targetHandles = {}
+    self.targetHandles = {}
 
-    occupiedZones = {}
+    self.occupiedZones = {}
 end
 
 --- Creates the broadcast zones for one station.
 ---@param station ClientStation
-local function createZones(station)
+function StationCache:createZones(station)
     for _, zone in ipairs(station.zones) do
-        zoneHandles[#zoneHandles + 1] = lib.zones.box({
+        self.zoneHandles[#self.zoneHandles + 1] = lib.zones.box({
             coords   = toVec3(zone.coords),
             size     = toVec3(zone.size),
             rotation = zone.heading or 0.0,
             debug    = ClientConfig.zoneDebug,
 
             onEnter = function()
-                occupiedZones[station.id] = true
+                self.occupiedZones[station.id] = true
                 Debug('entered broadcast zone for', station.label)
             end,
 
             onExit = function()
-                occupiedZones[station.id] = nil
+                self.occupiedZones[station.id] = nil
                 Debug('left broadcast zone for', station.label)
 
                 -- A host may not keep transmitting after walking out of the studio
-                if Radio.GetBroadcastFrequency() == station.frequency then
-                    Radio.StopBroadcast('Broadcast stopped: you left the studio')
+                if Radio:getBroadcastFrequency() == station.frequency then
+                    Radio:stopBroadcast('Broadcast stopped: you left the studio')
                 end
             end,
         })
@@ -110,13 +110,13 @@ end
 --- Creates the interaction points for one station.
 ---@param station ClientStation
 ---@param targetResource 'ox_target'|'qb-target'
-local function createTargets(station, targetResource)
+function StationCache:createTargets(station, targetResource)
     for index, target in ipairs(station.targets) do
         local coords = toVec3(target.coords)
 
         -- Read from the cache so the check follows live permission updates
         local function canInteract()
-            local current = byId[station.id]
+            local current = self.byId[station.id]
             return current ~= nil and current.canBroadcast
         end
 
@@ -128,12 +128,12 @@ local function createTargets(station, targetResource)
                     {
                         label       = target.label,
                         icon        = target.icon,
-                        onSelect    = function() Radio.OpenStationPanel(station.id) end,
+                        onSelect    = function() Radio:openStationPanel(station.id) end,
                         canInteract = canInteract,
                     },
                 },
             })
-            targetHandles[#targetHandles + 1] = { resource = 'ox_target', handle = handle }
+            self.targetHandles[#self.targetHandles + 1] = { resource = 'ox_target', handle = handle }
         else
             local name = ('cad-radiostation:%s:%d'):format(station.id, index)
             exports['qb-target']:AddCircleZone(name, coords, target.radius, {
@@ -144,75 +144,78 @@ local function createTargets(station, targetResource)
                     {
                         label       = target.label,
                         icon        = target.icon,
-                        action      = function() Radio.OpenStationPanel(station.id) end,
+                        action      = function() Radio:openStationPanel(station.id) end,
                         canInteract = canInteract,
                     },
                 },
                 distance = math.max(2.0, target.radius + 1.0),
             })
-            targetHandles[#targetHandles + 1] = { resource = 'qb-target', handle = name }
+            self.targetHandles[#self.targetHandles + 1] = { resource = 'qb-target', handle = name }
         end
     end
 end
 
 --- Replaces the cache and rebuilds all zones and targets from it.
 ---@param stations ClientStation[]
-local function applyStations(stations)
-    destroyWorldGeometry()
+function StationCache:apply(stations)
+    self:destroyWorldGeometry()
 
-    cache = stations or {}
-    byId = {}
+    self.cache = stations or {}
+    self.byId = {}
 
     local targetResource = getTargetResource()
 
-    for _, station in ipairs(cache) do
-        byId[station.id] = station
-        createZones(station)
+    for _, station in ipairs(self.cache) do
+        self.byId[station.id] = station
+        self:createZones(station)
         if targetResource then
-            createTargets(station, targetResource)
+            self:createTargets(station, targetResource)
         end
     end
 
-    Debug(('applied %d stations'):format(#cache))
+    Debug(('applied %d stations'):format(#self.cache))
 end
 
+--- Singleton cache shared by the client modules.
+Stations = StationCache:new()
+
 RegisterNetEvent('cad-radiostation:stations', function(stations)
-    applyStations(stations)
+    Stations:apply(stations)
 end)
 
 AddEventHandler('onResourceStop', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
-    destroyWorldGeometry()
+    Stations:destroyWorldGeometry()
 end)
 
 exports('GetCurrentStation', function()
-    return Radio.GetCurrentStation()
+    return Radio:getCurrentStation()
 end)
 
 exports('IsListening', function()
-    return Radio.GetCurrentStation() ~= nil
+    return Radio:getCurrentStation() ~= nil
 end)
 
 exports('GetVolume', function()
-    return Radio.GetVolume()
+    return Radio:getVolume()
 end)
 
 exports('GetStations', function()
-    return cache
+    return Stations:getAll()
 end)
 
 exports('TuneToStation', function(stationId)
-    Radio.TuneToStation(stationId)
+    Radio:tuneToStation(stationId)
 end)
 
 exports('LeaveStation', function()
-    Radio.LeaveStation()
+    Radio:leaveStation()
 end)
 
 exports('OpenRadioMenu', function()
-    Radio.OpenVehicleRadio()
+    Radio:openVehicleRadio()
 end)
 
 exports('OpenStationPanel', function(stationId)
-    Radio.OpenStationPanel(stationId)
+    Radio:openStationPanel(stationId)
 end)
